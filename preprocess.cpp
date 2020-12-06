@@ -1,6 +1,8 @@
 #include <fstream>
 #include <iostream>
 #include <opencv2/core/core.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/opencv.hpp>
 #include <string>
 
@@ -30,8 +32,8 @@
  *
  *
  *  Color (TODO):
- *  Verify if the result of undistortPoints of opencv is the same as Inverse
- *  Brown-Conrady of realsense
+ *  Verify if the result of undistortPoints in opencv is the same as Inverse
+ *  Brown-Conrady in realsense
  *
  *    Reference:
  *    https://github.com/IntelRealSense/librealsense/wiki/Projection-in-RealSense-SDK-2.0#intrinsic-camera-parameters
@@ -117,14 +119,11 @@ void ProjectPointToDistortedPixel(const cv::Mat &point, const cv::Mat &K,
 
   float x = px / pz, y = py / pz;
 
-  float r2 = x * x + y * y;
-  float f = 1 + coeffs[0] * r2 + coeffs[1] * r2 * r2 + coeffs[4] * r2 * r2 * r2;
-  x *= f;
-  y *= f;
-  float dx = x + 2 * coeffs[2] * x * y + coeffs[3] * (r2 + 2 * x * x);
-  float dy = y + 2 * coeffs[3] * x * y + coeffs[2] * (r2 + 2 * y * y);
-  x = dx;
-  y = dy;
+  // float r2 = x * x + y * y;
+  // float f = 1 + coeffs[0] * r2 + coeffs[1] * r2 * r2 + coeffs[4] * r2 * r2 *
+  // r2; x *= f; y *= f; float dx = x + 2 * coeffs[2] * x * y + coeffs[3] * (r2
+  // + 2 * x * x); float dy = y + 2 * coeffs[3] * x * y + coeffs[2] * (r2 + 2 *
+  // y * y); x = dx; y = dy;
 
   pixel = cv::Point2f(x * fx + ppx, y * fy + ppy);
 }
@@ -178,19 +177,19 @@ void Transform3DPoints(const cv::Mat &R, const cv::Mat &t,
 
 void AlignDepth(const cv::Mat &imD_original, cv::Mat &imD_aligned,
                 const cv::Mat &K_c, const cv::Mat &K_d, const float depth_scale,
-                const std::vector<float> &dist_coeffs, const cv::Mat &R_d_c,
-                const cv::Mat &t_d_c) {
+                const std::vector<float> &dist_coeffs, const cv::Mat &R,
+                const cv::Mat &t) {
   std::vector<cv::Mat> vp3D;
   std::vector<std::pair<size_t, size_t>> vpPixelIdx;
   UnprojectPixel(IMAGE_WIDTH, IMAGE_HEIGHT, K_c, dist_coeffs, vp3D, vpPixelIdx);
-  Transform3DPoints(R_d_c, t_d_c, vp3D);
+  Transform3DPoints(R, t, vp3D);
 
   std::vector<cv::Point2f> vp2D;
   ProjectPoint(vp3D, K_d, dist_coeffs, vp2D);
 
   cv::Mat _imD;
   imD_original.convertTo(_imD, CV_32F);
-  imD_aligned = cv::Mat(IMAGE_HEIGHT,IMAGE_WIDTH, CV_16UC1, cv::Scalar(0));
+  imD_aligned = cv::Mat(IMAGE_HEIGHT, IMAGE_WIDTH, CV_16UC1, cv::Scalar(0));
 
   for (size_t i = 0; i < vp3D.size(); ++i) {
     const size_t &r = vpPixelIdx[i].first;
@@ -213,16 +212,16 @@ int main(int argc, char **argv) {
   LoadImages(DATASET_PATH + "TIMESTAMP.txt", vstrRGBImageFilenames,
              vstrDepthImageFilenames, vTimestamps);
 
-  cv::Mat R_d_c = R_c_d.t();
-  cv::Mat t_d_c = -R_d_c * t_c_d;
+  cv::Mat R = R_c_d.t();
+  cv::Mat t = -R * t_c_d;
 
   for (const auto &strName : vstrDepthImageFilenames) {
     cv::Mat imD, imD_aligned;
     imD = cv::imread(DATASET_PATH + "depth/" + strName,
                      CV_LOAD_IMAGE_ANYCOLOR | CV_LOAD_IMAGE_ANYDEPTH);
-    AlignDepth(imD, imD_aligned, K_c, K_d, DEPTH_SCALE, dist_coeffs, R_d_c,
-               t_d_c);
-    std::cout << ALIGNED_DEPTH_PATH + strName <<std::endl;
+    AlignDepth(imD, imD_aligned, K_c, K_d, DEPTH_SCALE, dist_coeffs, R,
+               t);
+    std::cout << ALIGNED_DEPTH_PATH + strName << std::endl;
     cv::imwrite(ALIGNED_DEPTH_PATH + strName, imD_aligned);
   }
 
