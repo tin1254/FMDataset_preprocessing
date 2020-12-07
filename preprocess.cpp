@@ -44,9 +44,7 @@ const std::string DATASET_PATH =
     "/home/tin/Datasets/FMDataset/dorm1/dorm1_slow/";
 const std::string ALIGNED_DEPTH_PATH =
     "/home/tin/Datasets/FMDataset/dorm1/dorm1_slow/aligned/";
-const float DEPTH_SCALE = 1000;
 const size_t IMAGE_WIDTH = 640, IMAGE_HEIGHT = 480;
-const float eps = 1e-16;
 
 float R_c_d_raw[3][3] = {{0.999980211, -0.00069964811, -0.0062491186},
                          {0.000735448, 0.999983311, 0.00572841847},
@@ -175,20 +173,31 @@ void Transform3DPoints(const cv::Mat &R, const cv::Mat &t,
   for (auto &p : vp3D) p = R * p + t;
 }
 
-void AlignDepth(const cv::Mat &imD_original, cv::Mat &imD_aligned,
-                const cv::Mat &K_c, const cv::Mat &K_d, const float depth_scale,
-                const std::vector<float> &dist_coeffs, const cv::Mat &R,
-                const cv::Mat &t) {
-  std::vector<cv::Mat> vp3D;
-  std::vector<std::pair<size_t, size_t>> vpPixelIdx;
+void ProjectColorToDepth(const cv::Mat &K_c, const cv::Mat &K_d,
+                         const std::vector<float> &dist_coeffs,
+                         const cv::Mat &R, const cv::Mat &t,
+                         std::vector<cv::Mat> &vp3D,
+                         std::vector<std::pair<size_t, size_t>> &vpPixelIdx,
+                         std::vector<cv::Point2f> &vp2D) {
+  vp3D.clear();
+  vpPixelIdx.clear();
+  vp2D.clear();
+  vp3D.reserve(IMAGE_WIDTH * IMAGE_HEIGHT);
+  vpPixelIdx.reserve(IMAGE_WIDTH * IMAGE_HEIGHT);
+  vp2D.reserve(IMAGE_WIDTH * IMAGE_HEIGHT);
+
   UnprojectPixel(IMAGE_WIDTH, IMAGE_HEIGHT, K_c, dist_coeffs, vp3D, vpPixelIdx);
   Transform3DPoints(R, t, vp3D);
 
-  std::vector<cv::Point2f> vp2D;
   ProjectPoint(vp3D, K_d, dist_coeffs, vp2D);
+}
 
-  cv::Mat _imD;
-  imD_original.convertTo(_imD, CV_32F);
+void AlignDepth(const cv::Mat &imD_original, cv::Mat &imD_aligned,
+                const std::vector<cv::Mat> &vp3D,
+                const std::vector<std::pair<size_t, size_t>> &vpPixelIdx,
+                const std::vector<cv::Point2f> &vp2D) {
+  cv::Mat fImD;
+  imD_original.convertTo(fImD, CV_32F);
   imD_aligned = cv::Mat(IMAGE_HEIGHT, IMAGE_WIDTH, CV_16UC1, cv::Scalar(0));
 
   for (size_t i = 0; i < vp3D.size(); ++i) {
@@ -196,7 +205,7 @@ void AlignDepth(const cv::Mat &imD_original, cv::Mat &imD_aligned,
     const size_t &c = vpPixelIdx[i].second;
     if (r >= 0 && r < imD_original.size[1] && c >= 0 &&
         c < imD_original.size[01]) {
-      imD_aligned.at<ushort>(r, c) = InterpolatePixelValue(_imD, vp2D[i]);
+      imD_aligned.at<ushort>(r, c) = InterpolatePixelValue(fImD, vp2D[i]);
     }
   }
 }
@@ -215,13 +224,17 @@ int main(int argc, char **argv) {
   cv::Mat R = R_c_d.t();
   cv::Mat t = -R * t_c_d;
 
+  std::vector<cv::Mat> vp3D;
+  std::vector<std::pair<size_t, size_t>> vpPixelIdx;
+  std::vector<cv::Point2f> vp2D;
+  ProjectColorToDepth(K_c, K_d, dist_coeffs, R, t, vp3D, vpPixelIdx, vp2D);
+
   for (const auto &strName : vstrDepthImageFilenames) {
     cv::Mat imD, imD_aligned;
+
     imD = cv::imread(DATASET_PATH + "depth/" + strName,
                      CV_LOAD_IMAGE_ANYCOLOR | CV_LOAD_IMAGE_ANYDEPTH);
-    AlignDepth(imD, imD_aligned, K_c, K_d, DEPTH_SCALE, dist_coeffs, R,
-               t);
-    std::cout << ALIGNED_DEPTH_PATH + strName << std::endl;
+    AlignDepth(imD, imD_aligned, vp3D, vpPixelIdx, vp2D);
     cv::imwrite(ALIGNED_DEPTH_PATH + strName, imD_aligned);
   }
 
