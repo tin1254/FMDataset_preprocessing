@@ -40,10 +40,12 @@
  *    https://docs.opencv.org/3.4/da/d54/group__imgproc__transform.html#ga55c716492470bfe86b0ee9bf3a1f0f7e
  **/
 
-const std::string DATASET_PATH =
-    "/home/tin/Datasets/FMDataset/dorm1/dorm1_slow/";
-const std::string ALIGNED_DEPTH_PATH =
-    "/home/tin/Datasets/FMDataset/dorm1/dorm1_slow/aligned/";
+// const std::string DATASET_PATH =
+//     "/home/tin/Datasets/FMDataset/dorm1/dorm1_slow/";
+// const std::string OUTPUT_PATH =
+//     "/home/tin/Datasets/FMDataset/dorm1/dorm1_slow/aligned/";
+
+
 const size_t IMAGE_WIDTH = 640, IMAGE_HEIGHT = 480;
 
 float R_c_d_raw[3][3] = {{0.999980211, -0.00069964811, -0.0062491186},
@@ -52,6 +54,10 @@ float R_c_d_raw[3][3] = {{0.999980211, -0.00069964811, -0.0062491186},
       t_c_d_raw[3] = {-0.057460, -0.001073, -0.002205},
       K_d_raw[3][3] = {{583, 0, 325}, {0, 583, 240}, {0, 0, 1}},
       K_c_raw[3][3] = {{608, 0, 331}, {0, 608, 246}, {0, 0, 1}};
+
+const cv::Mat R_c_d(3, 3, CV_32F, &R_c_d_raw), t_c_d(3, 1, CV_32F, &t_c_d_raw),
+    K_d(3, 3, CV_32F, &K_d_raw), K_c(3, 3, CV_32F, &K_c_raw);
+const std::vector<float> dist_coeffs = {0.0644, -0.114, 0.00127, 0.00203, 0};
 
 void LoadImages(const std::string &strFile,
                 std::vector<std::string> &vstrRGBImageFilenames,
@@ -211,14 +217,25 @@ void AlignDepth(const cv::Mat &imD_original, cv::Mat &imD_aligned,
 }
 
 int main(int argc, char **argv) {
-  const cv::Mat R_c_d(3, 3, CV_32F, &R_c_d_raw),
-      t_c_d(3, 1, CV_32F, &t_c_d_raw), K_d(3, 3, CV_32F, &K_d_raw),
-      K_c(3, 3, CV_32F, &K_c_raw);
-  const std::vector<float> dist_coeffs = {0.0644, -0.114, 0.00127, 0.00203, 0};
+  if (argc < 3 || 4 < argc) {
+    std::cout << "ERROR: please provide dataset path and output path"
+              << std::endl;
+    exit(1);
+  }
+
+  std::string dataset_path, output_path;
+  bool visualization = false;
+  try {
+    dataset_path = argv[1];
+    output_path = argv[2];
+    if (argc == 4) visualization = static_cast<bool>(std::stoi(argv[3]));
+  } catch (const std::exception &e) {
+    std::cerr << e.what() << std::endl;
+  }
 
   std::vector<std::string> vstrRGBImageFilenames, vstrDepthImageFilenames;
   std::vector<int> vTimestamps;
-  LoadImages(DATASET_PATH + "TIMESTAMP.txt", vstrRGBImageFilenames,
+  LoadImages(dataset_path + "TIMESTAMP.txt", vstrRGBImageFilenames,
              vstrDepthImageFilenames, vTimestamps);
 
   cv::Mat R = R_c_d.t();
@@ -231,11 +248,25 @@ int main(int argc, char **argv) {
 
   for (const auto &strName : vstrDepthImageFilenames) {
     cv::Mat imD, imD_aligned;
-
-    imD = cv::imread(DATASET_PATH + "depth/" + strName,
+    std::cout <<"File name: " <<strName << std::endl;
+    imD = cv::imread(dataset_path + "depth/" + strName,
                      CV_LOAD_IMAGE_ANYCOLOR | CV_LOAD_IMAGE_ANYDEPTH);
     AlignDepth(imD, imD_aligned, vp3D, vpPixelIdx, vp2D);
-    cv::imwrite(ALIGNED_DEPTH_PATH + strName, imD_aligned);
+    cv::imwrite(output_path + strName, imD_aligned);
+
+    if (visualization) {
+      cv::Mat dst, color, color_imD;
+      color = cv::imread(dataset_path + "color/" + strName,
+                         CV_LOAD_IMAGE_ANYCOLOR | CV_LOAD_IMAGE_ANYDEPTH);
+
+      imD_aligned.convertTo(color_imD, CV_32F);
+      color_imD /= 9;
+      color_imD.convertTo(color_imD, CV_8UC1);
+      cv::applyColorMap(color_imD, color_imD, cv::COLORMAP_JET);
+      cv::addWeighted(color, 0.6, color_imD, 0.4, 0.0, dst);
+      cv::imshow("Blend", dst);
+      if (cv::waitKey(1) >= 0) continue;
+    }
   }
 
   return 0;
