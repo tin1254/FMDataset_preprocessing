@@ -3,8 +3,9 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include "opencv2/imgproc.hpp"
+#include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
+#include <opencv2/calib3d/calib3d.hpp>
 #include <string>
 
 /**
@@ -76,7 +77,7 @@ void LoadImages(const std::string &strFile,
 
 // Reference:
 // https://github.com/IntelRealSense/librealsense/blob/5e73f7bb906a3cbec8ae43e888f182cc56c18692/include/librealsense2/rsutil.h#L46
-void UnprojectDistortedPixelToPoint(cv::Mat &point, const cv::Mat &K,
+void UnprojectDistortedPixelToPoint(cv::Point3f &point, const cv::Mat &K,
                                     const std::vector<float> &coeffs,
                                     const size_t pixel_x, const size_t pixel_y,
                                     const float depth)
@@ -89,25 +90,21 @@ void UnprojectDistortedPixelToPoint(cv::Mat &point, const cv::Mat &K,
   float x = (pixel_x - ppx) / fx;
   float y = (pixel_y - ppy) / fy;
 
-  point = (cv::Mat_<float>(3, 1) << depth * x, depth * y, depth);
+  point = cv::Point3f(depth * x, depth * y, depth);
 }
 
 // Reference:
 // https://github.com/IntelRealSense/librealsense/blob/5e73f7bb906a3cbec8ae43e888f182cc56c18692/include/librealsense2/rsutil.h#L15
-void ProjectPointToDistortedPixel(const cv::Mat &point, const cv::Mat &K,
+void ProjectPointToDistortedPixel(const cv::Point3f &point, const cv::Mat &K,
                                   const std::vector<float> &coeffs,
                                   cv::Point2f &pixel)
 {
-  const auto &px = point.at<float>(0);
-  const auto &py = point.at<float>(1);
-  const auto &pz = point.at<float>(2);
-
   const auto &fx = K.at<float>(0, 0);
   const auto &fy = K.at<float>(1, 1);
   const auto &ppx = K.at<float>(0, 2);
   const auto &ppy = K.at<float>(1, 2);
 
-  float x = px / pz, y = py / pz;
+  float x = point.x / point.z, y = point.y / point.z;
 
   float r2 = x * x + y * y;
   float f = 1 + coeffs[0] * r2 + coeffs[1] * r2 * r2 + coeffs[4] * r2 * r2 * r2;
@@ -123,19 +120,19 @@ void ProjectPointToDistortedPixel(const cv::Mat &point, const cv::Mat &K,
 
 void UnprojectPixel(const cv::Mat &imD, const cv::Mat &K,
                     const std::vector<float> &dist_coeffs,
-                    std::vector<cv::Mat> &vp3D,
+                    std::vector<cv::Point3f> &vp3D,
                     std::vector<std::pair<size_t, size_t>> &vpPixelIdx)
 {
   vp3D.clear();
   vpPixelIdx.clear();
-  vp3D.reserve(imD.size[0] * imD.size[1]);
-  vpPixelIdx.reserve(imD.size[0] * imD.size[1]);
+  vp3D.reserve(imD.rows * imD.cols);
+  vpPixelIdx.reserve(imD.rows * imD.cols);
 
-  for (size_t c = 0; c < imD.size[1]; ++c)
+  for (size_t c = 0; c < imD.cols; ++c)
   {
-    for (size_t r = 0; r < imD.size[0]; ++r)
+    for (size_t r = 0; r < imD.rows; ++r)
     {
-      cv::Mat p3D;
+      cv::Point3f p3D;
       UnprojectDistortedPixelToPoint(p3D, K, dist_coeffs, c, r, imD.at<ushort>(r, c) / DEPTH_SCALE);
       vp3D.push_back(p3D);
       vpPixelIdx.emplace_back(r, c);
@@ -143,7 +140,7 @@ void UnprojectPixel(const cv::Mat &imD, const cv::Mat &K,
   }
 }
 
-void ProjectPoint(const std::vector<cv::Mat> &vp3D, const cv::Mat &K,
+void ProjectPoint(const std::vector<cv::Point3f> &vp3D, const cv::Mat &K,
                   const std::vector<float> &dist_coeffs,
                   std::vector<cv::Point2f> &vp2D)
 {
@@ -158,16 +155,19 @@ void ProjectPoint(const std::vector<cv::Mat> &vp3D, const cv::Mat &K,
 }
 
 void Transform3DPoints(const cv::Mat &R, const cv::Mat &t,
-                       std::vector<cv::Mat> &vp3D)
+                       std::vector<cv::Point3f> &vp3D)
 {
   for (auto &p : vp3D)
-    p = R * p + t;
+  {
+    cv::Mat _p = R * static_cast<cv::Mat>(p) + t;
+    p = static_cast<cv::Point3f>(_p);
+  }
 }
 
 void ProjectDepthToColor(const cv::Mat &imD, const cv::Mat &K_c, const cv::Mat &K_d,
                          const std::vector<float> &dist_coeffs,
                          const cv::Mat &R, const cv::Mat &t,
-                         std::vector<cv::Mat> &vp3D,
+                         std::vector<cv::Point3f> &vp3D,
                          std::vector<std::pair<size_t, size_t>> &vpPixelIdx,
                          std::vector<cv::Point2f> &vp2D)
 {
@@ -184,19 +184,23 @@ void ProjectDepthToColor(const cv::Mat &imD, const cv::Mat &K_c, const cv::Mat &
 }
 
 void AlignDepth(const cv::Mat &imD_original, cv::Mat &imD_aligned,
-                const std::vector<cv::Mat> &vp3D,
+                const std::vector<cv::Point3f> &vp3D,
                 const std::vector<std::pair<size_t, size_t>> &vpPixelIdx,
-                const std::vector<cv::Point2f> &vp2D)
+                const std::vector<cv::Point2f> &vp2D, std::vector<size_t> &calib_idx)
 {
   imD_aligned = cv::Mat(IMAGE_HEIGHT, IMAGE_WIDTH, CV_16UC1, cv::Scalar(0));
+  calib_idx.clear();
 
   for (size_t i = 0; i < vp3D.size(); ++i)
   {
     const size_t c = std::round(vp2D[i].x);
     const size_t r = std::round(vp2D[i].y);
-    if (r >= 0 && r < imD_original.size[0] && c >= 0 &&
-        c < imD_original.size[1])
+    if (r >= 0 && r < imD_original.rows && c >= 0 &&
+        c < imD_original.cols)
+    {
       imD_aligned.at<ushort>(r, c) = imD_original.at<ushort>(vpPixelIdx[i].first, vpPixelIdx[i].second);
+      calib_idx.push_back(i);
+    }
   }
 }
 
@@ -231,24 +235,43 @@ int main(int argc, char **argv)
   cv::Mat R = R_c_d;
   cv::Mat t = t_c_d;
 
-  std::vector<cv::Mat> vp3D;
-  std::vector<std::pair<size_t, size_t>> vpPixelIdx;
-  std::vector<cv::Point2f> vp2D;
+  // std::vector<std::vector<cv::Point3f>> vvp3D;
+  // std::vector<std::vector<cv::Point2f>> vvp2D;
 
-  for (const auto &strName : vstrDepthImageFilenames)
+  for (size_t i = 0; i < vstrDepthImageFilenames.size(); ++i)
   {
+    const std::string& strName=vstrDepthImageFilenames[i];
+
     cv::Mat imD, imD_aligned, img_filtered;
+    std::vector<cv::Point3f> vp3D;
+    std::vector<std::pair<size_t, size_t>> vpPixelIdx;
+    std::vector<cv::Point2f> vp2D;
+    std::vector<size_t> calib_idx;
+
     std::cout << "File name: " << strName << std::endl;
     imD = cv::imread(dataset_path + "depth/" + strName,
                      CV_LOAD_IMAGE_ANYCOLOR | CV_LOAD_IMAGE_ANYDEPTH);
 
     ProjectDepthToColor(imD, K_c, K_d, dist_coeffs, R, t, vp3D, vpPixelIdx, vp2D);
-    AlignDepth(imD, imD_aligned, vp3D, vpPixelIdx, vp2D);
+    AlignDepth(imD, imD_aligned, vp3D, vpPixelIdx, vp2D, calib_idx);
 
     // Filtering because rounding is used, interpolation could be more accurate
     imD_aligned.convertTo(imD_aligned, CV_32F);
     cv::medianBlur(imD_aligned, img_filtered, 5);
     img_filtered.convertTo(img_filtered, CV_16UC1);
+
+    // Select some images for calibration
+    // if (i % 100 == 0)
+    // {
+    //   std::vector<cv::Point3f> calib_vp3D(calib_idx.size());
+    //   std::vector<cv::Point2f> calib_vp2D(calib_idx.size());
+
+    //   std::transform(calib_idx.begin(), calib_idx.end(), calib_vp3D.begin(), [vp3D](size_t idx) { return vp3D[idx]; });
+    //   std::transform(calib_idx.begin(), calib_idx.end(), calib_vp2D.begin(), [vp2D](size_t idx) { return vp2D[idx]; });
+
+    //   vvp3D.push_back(calib_vp3D);
+    //   vvp2D.push_back(calib_vp2D);
+    // }
 
     cv::imwrite(output_path + strName, img_filtered);
 
@@ -268,6 +291,13 @@ int main(int argc, char **argv)
         continue;
     }
   }
+
+  // cv::Mat distCoeffs, _R, _T;
+  // cv::calibrateCamera(vvp3D, vvp2D, cv::Size(IMAGE_HEIGHT, IMAGE_HEIGHT), K_c, distCoeffs, _R, _T, cv::CALIB_USE_INTRINSIC_GUESS);
+
+  // std::cout << "distCoeffs : " << distCoeffs << std::endl;
+  // std::cout << "Rotation vector : " << _R << std::endl;
+  // std::cout << "Translation vector : " << _T << std::endl;
 
   return 0;
 }
