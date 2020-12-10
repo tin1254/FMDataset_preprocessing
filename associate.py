@@ -16,7 +16,7 @@ with open(file_path+"/TIMESTAMP.txt") as f:
 for line in lines:
     if line[0] != "#":
         line = line.replace("\n", "").split(",")
-        timestamp = line[0]
+        timestamp = str(float(line[0])/1e6) #  µs -> s
         color = rgbd_path+line[1]
         depth = depth_path+line[2]
         print(" ".join([timestamp, color, timestamp, depth]))
