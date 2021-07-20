@@ -3,7 +3,7 @@ import sys
 if len(sys.argv) != 4:
     raise ValueError(
         "Usage: python3 associate.py path_to_dataset_dir rgb_images_dir depth_images_dir\n" +
-        "python3 associate.py /home/tin/Datasets/FMDataset/dorm1/dorm1_slow color aligned")
+        "python3 associate.py /home/tin/Datasets/FMDataset/dorm1/dorm1_slow color aligned_depth")
 
 file_path = sys.argv[1]
 rgbd_path = sys.argv[2]+"/"
